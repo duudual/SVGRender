@@ -14,13 +14,12 @@ namespace VCX::Labs::SVG {
     CaseSVGRender::CaseSVGRender():
         _texture({ .MinFilter = Engine::GL::FilterMode::Linear, .MagFilter = Engine::GL::FilterMode::Nearest }) {
         std::memset(_svgTextBuffer, 0, sizeof(_svgTextBuffer));
-        _svgTextContent = "";  // 初始化文本内容
+        _svgTextContent = "";
         
-        // 计算项目根目录：从当前工作目录向上查找，直到找到包含 assets 文件夹的目录
+        // Find project root by searching for assets folder
         std::filesystem::path currentPath = std::filesystem::current_path();
         std::filesystem::path searchPath = currentPath;
         
-        // 先检查当前目录
         while (!searchPath.empty()) {
             if (std::filesystem::exists(searchPath / "assets") && 
                 std::filesystem::exists(searchPath / "src")) {
@@ -28,11 +27,10 @@ namespace VCX::Labs::SVG {
                 break;
             }
             auto parent = searchPath.parent_path();
-            if (parent == searchPath) break;  // 到达根目录
+            if (parent == searchPath) break;
             searchPath = parent;
         }
         
-        // 如果找不到，使用当前目录
         if (_projectRoot.empty()) {
             _projectRoot = currentPath.string();
         }
@@ -78,15 +76,12 @@ namespace VCX::Labs::SVG {
     }
 
     void CaseSVGRender::OnSetupPropsContent() {
-        // 根据当前选中的标签显示对应内容
         if (_currentTab == 0) {
-            // Settings 内容
             ImGui::Text("=== Editor Settings ===");
             ImGui::Checkbox("Show Control Points", &_showControlPoints);
             ImGui::Checkbox("Auto Sync Text", &_autoSyncText);
             ImGui::SliderFloat("Grid Size", &_gridSize, 10.0f, 100.0f);
             
-            // 背景颜色调整
             if (ImGui::ColorEdit4("Background", (float*)&_backgroundColor, ImGuiColorEditFlags_NoSidePreview | ImGuiColorEditFlags_AlphaBar)) {
                 UpdateRender();
             }
@@ -326,10 +321,8 @@ namespace VCX::Labs::SVG {
         // Fill Color
         if (element.style.fillColor.has_value()) {
             glm::vec4 color = element.style.fillColor.value();
-            // 使用 NoPicker 标志让颜色选择器在当前位置展开，不会弹出到画布区域
             if (ImGui::ColorEdit4("Fill Color", (float*)&color, ImGuiColorEditFlags_NoSidePreview | ImGuiColorEditFlags_AlphaBar)) {
                 element.style.fillColor = color;
-                // 根据元素类型同步到具体元素
                 switch (element.type) {
                     case SVGElement::Type::Rect:
                         element.rect.style.fillColor = color;
@@ -371,7 +364,6 @@ namespace VCX::Labs::SVG {
         // Stroke Color
         if (element.style.strokeColor.has_value()) {
             glm::vec4 color = element.style.strokeColor.value();
-            // 使用 NoPicker 标志让颜色选择器在当前位置展开，不会弹出到画布区域
             if (ImGui::ColorEdit4("Stroke Color", (float*)&color, ImGuiColorEditFlags_NoSidePreview | ImGuiColorEditFlags_AlphaBar)) {
                 element.style.strokeColor = color;
                 switch (element.type) {
@@ -551,69 +543,43 @@ namespace VCX::Labs::SVG {
     void CaseSVGRender::OnProcessInput(ImVec2 const & pos) {
         ImGuiIO& io = ImGui::GetIO();
         
-        // 检查鼠标是否在画布范围内（基于坐标判断）
         bool isMouseInCanvas = (pos.x >= 0 && pos.x < static_cast<float>(_renderWidth) &&
                                 pos.y >= 0 && pos.y < static_cast<float>(_renderHeight));
         
-        // 检测新的鼠标点击事件（从未按下变为按下）
         bool mouseJustPressed = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
         
-        // Draw Overlay UI (工具栏等)
-        // 这会在画布上绘制UI元素，并且会影响 io.WantCaptureMouse
         DrawToolbar();
         DrawStatusBar(pos);
         
-        // 检查点击是否发生在工具栏等覆盖UI上
-        // 如果鼠标悬停在工具栏按钮等UI元素上，则不处理画布点击
         if (!_fileLoaded) return;
         
         bool isMouseDown = io.MouseDown[0];
         bool wasMouseDown = _isDragging;
-        
-        // 如果 ImGui 正在捕获鼠标（用户在操作其他 UI 元素如颜色选择器、Layer 面板等）
-        // 不开始新的拖拽，但仍需处理进行中的拖拽
         bool imguiCaptureMouse = io.WantCaptureMouse;
         
-        // Default Select/Edit Mode
-        
-        // 鼠标刚刚按下（新的点击事件）
         if (mouseJustPressed && !_isDragging && !imguiCaptureMouse) {
-            // 只处理以下情况的点击：
-            // 1. 鼠标在画布范围内
-            // 2. 没有点击在覆盖UI上（工具栏按钮等）
-            // 如果点击在窗口外或其他子窗口，pos会在画布范围外，不会触发
             if (isMouseInCanvas) {
                 StartDrag(pos.x, pos.y);
             }
-            // 如果点击在画布外或覆盖UI上，不做任何处理，保持当前选择状态
         }
-        // 鼠标拖拽中
         else if (isMouseDown && _isDragging) {
-            // 如果拖拽已经开始，继续处理（即使鼠标移到UI上）
             UpdateDrag(pos.x, pos.y);
         }
-        // 鼠标释放
         else if (!isMouseDown && _isDragging) {
-            // 只有当拖拽在进行中时才结束拖拽
             EndDrag();
         }
-        // 鼠标移动（未按下且未拖拽）
         else if (!isMouseDown && !_isDragging) {
-            // 只有在画布内才更新悬停状态
             if (isMouseInCanvas) {
                 // 更新悬停状态
                 int newHovered = -1;
                 
-                // 先检查控制点
                 if (_selectedElementIndex >= 0 && _showControlPoints) {
                     int cpIndex = FindControlPointAtPosition(pos.x, pos.y);
                     if (cpIndex >= 0) {
-                        // 悬停在控制点上
                         newHovered = _selectedElementIndex;
                     }
                 }
                 
-                // 检查元素
                 if (newHovered < 0) {
                     newHovered = FindElementAtPosition(pos.x, pos.y);
                 }
@@ -627,7 +593,6 @@ namespace VCX::Labs::SVG {
         
         _lastMousePos = pos;
         
-        // 键盘输入
         if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
             _selectedElementIndex = -1;
             _isDragging = false;
@@ -648,7 +613,6 @@ namespace VCX::Labs::SVG {
         ImGui::SetCursorPos(ImVec2(10, 10));
         ImGui::BeginGroup();
         
-        // Toolbar background
         ImGui::PushStyleColor(ImGuiCol_Button, _currentTool == ToolType::Select ? ImVec4(0.4f, 0.4f, 0.8f, 1.0f) : ImVec4(0.2f, 0.2f, 0.2f, 0.8f));
         if (ImGui::Button("Select")) _currentTool = ToolType::Select;
         ImGui::PopStyleColor();
@@ -689,7 +653,6 @@ namespace VCX::Labs::SVG {
                     _originalWidth = bounds.maxX - bounds.minX;
                     _originalHeight = bounds.maxY - bounds.minY;
                     
-                    // 保存原始点数据（用于路径和直线的控制点操作）
                     _originalPoints.clear();
                     if (elem.type == SVGElement::Type::Path) {
                         for (const auto& cmd : elem.path.commands) {
@@ -707,24 +670,20 @@ namespace VCX::Labs::SVG {
             }
         }
         
-        // 检查是否点击了元素
         int clickedElement = FindElementAtPosition(x, y);
         if (clickedElement >= 0) {
             _selectedElementIndex = clickedElement;
             _isDragging = true;
             _dragType = ControlPointType::MoveElement;
             
-            // 更新控制点
             UpdateControlPoints();
             
-            // 保存原始位置
             const auto& bounds = _elementBounds[clickedElement];
             _originalX = bounds.minX;
             _originalY = bounds.minY;
             _originalWidth = bounds.maxX - bounds.minX;
             _originalHeight = bounds.maxY - bounds.minY;
 
-            // 保存原始点数据（用于路径和直线）
             _originalPoints.clear();
             const auto& elem = _svgDocument.elements[clickedElement];
             if (elem.type == SVGElement::Type::Path) {
@@ -750,11 +709,9 @@ namespace VCX::Labs::SVG {
         
         _dragCurrentPos = ImVec2(x, y);
         
-        // 将屏幕坐标增量转换为 SVG 坐标增量
         float screenDx = x - _dragStartPos.x;
         float screenDy = y - _dragStartPos.y;
         
-        // 使用 viewBox 缩放因子转换增量
         float svgDx = screenDx / _vbScaleX;
         float svgDy = screenDy / _vbScaleY;
         
@@ -870,7 +827,6 @@ namespace VCX::Labs::SVG {
     void CaseSVGRender::UpdateBackgroundInSVG() {
         if (!_fileLoaded) return;
         
-        // 查找背景矩形元素
         int bgIndex = -1;
         for (size_t i = 0; i < _svgDocument.elements.size(); i++) {
             if (_svgDocument.elements[i].id == "background" && 
@@ -881,7 +837,6 @@ namespace VCX::Labs::SVG {
         }
         
         if (bgIndex >= 0) {
-            // 更新现有背景
             auto& bgElement = _svgDocument.elements[bgIndex];
             bgElement.rect.position = Point2D(0, 0);
             bgElement.rect.width = _svgDocument.width;
@@ -889,9 +844,7 @@ namespace VCX::Labs::SVG {
             bgElement.rect.style.fillColor = glm::vec4(_backgroundColor.x, _backgroundColor.y, _backgroundColor.z, _backgroundColor.w);
             bgElement.rect.style.strokeWidth = 0.0f;
         } else {
-            // 创建新的背景矩形
             SVGElement bgElement(SVGElement::Type::Rect);
-            // 手动初始化rect成员
             new (&bgElement.rect) SVGRect();
             
             bgElement.id = "background";
@@ -984,7 +937,6 @@ namespace VCX::Labs::SVG {
     void CaseSVGRender::UpdateElementBounds() {
         _elementBounds.clear();
         
-        // 首先更新 viewBox 变换参数
         UpdateViewBoxTransform();
         
         for (size_t i = 0; i < _svgDocument.elements.size(); i++) {
@@ -993,10 +945,8 @@ namespace VCX::Labs::SVG {
             bounds.elementIndex = static_cast<int>(i);
             bounds.id = element.id;
             
-            // 临时存储 SVG 坐标系中的边界
             float svgMinX, svgMinY, svgMaxX, svgMaxY;
             
-            // 根据元素类型计算边界（在 SVG 坐标系中）
             switch (element.type) {
                 case SVGElement::Type::Circle: {
                     Point2D center = element.circle.transform.TransformPoint(element.circle.center);
@@ -1030,7 +980,6 @@ namespace VCX::Labs::SVG {
                 case SVGElement::Type::Path: {
                     auto vertices = element.path.GetVertices();
                     if (!vertices.empty()) {
-                        // 应用元素的变换到顶点
                         svgMinX = svgMaxX = vertices[0].x;
                         svgMinY = svgMaxY = vertices[0].y;
                         for (const auto& v : vertices) {
@@ -1503,7 +1452,6 @@ namespace VCX::Labs::SVG {
                         auto c = *elem.path.style.fillColor;
                         oss << " fill=\"rgb(" << (int)(c.r*255) << "," << (int)(c.g*255) << "," << (int)(c.b*255) << ")\"";
                     }
-                    // 如果没有fillColor也没有fillNone，则使用默认黑色，不需要输出（SVG默认）
                     if (elem.path.style.strokeColor) {
                         auto c = *elem.path.style.strokeColor;
                         oss << " stroke=\"rgb(" << (int)(c.r*255) << "," << (int)(c.g*255) << "," << (int)(c.b*255) << ")\"";
@@ -1564,7 +1512,6 @@ namespace VCX::Labs::SVG {
                 }
                 
                 case SVGElement::Type::Group:
-                    // Group已经被展平处理，不需要单独生成
                     break;
                 
                 default:
@@ -1588,13 +1535,11 @@ namespace VCX::Labs::SVG {
         
         // 添加调整大小的控制点（bounds 已经是屏幕坐标）
         if (elem.type == SVGElement::Type::Rect || elem.type == SVGElement::Type::Ellipse) {
-            // 四角
             _controlPoints.push_back({Point2D(bounds.minX, bounds.minY), ControlPointType::ResizeTopLeft, _selectedElementIndex, -1});
             _controlPoints.push_back({Point2D(bounds.maxX, bounds.minY), ControlPointType::ResizeTopRight, _selectedElementIndex, -1});
             _controlPoints.push_back({Point2D(bounds.minX, bounds.maxY), ControlPointType::ResizeBottomLeft, _selectedElementIndex, -1});
             _controlPoints.push_back({Point2D(bounds.maxX, bounds.maxY), ControlPointType::ResizeBottomRight, _selectedElementIndex, -1});
             
-            // 边中点
             float midX = (bounds.minX + bounds.maxX) / 2;
             float midY = (bounds.minY + bounds.maxY) / 2;
             _controlPoints.push_back({Point2D(midX, bounds.minY), ControlPointType::ResizeTop, _selectedElementIndex, -1});
@@ -1603,11 +1548,9 @@ namespace VCX::Labs::SVG {
             _controlPoints.push_back({Point2D(bounds.maxX, midY), ControlPointType::ResizeRight, _selectedElementIndex, -1});
         }
         else if (elem.type == SVGElement::Type::Circle) {
-            // 圆形只需要一个调整半径的控制点，或者四角
             _controlPoints.push_back({Point2D(bounds.maxX, bounds.maxY), ControlPointType::ResizeBottomRight, _selectedElementIndex, -1});
         }
         else if (elem.type == SVGElement::Type::Line) {
-            // 直线的两个端点 - 需要转换为屏幕坐标
             Point2D svgStart = elem.line.transform.TransformPoint(elem.line.start);
             Point2D svgEnd = elem.line.transform.TransformPoint(elem.line.end);
             Point2D screenStart = SVGToScreen(svgStart);
@@ -1616,7 +1559,6 @@ namespace VCX::Labs::SVG {
             _controlPoints.push_back({screenEnd, ControlPointType::ResizeBottomRight, _selectedElementIndex, -1});
         }
         
-        // 贝塞尔曲线的控制点 - 需要转换为屏幕坐标
         if (elem.type == SVGElement::Type::Path) {
             Point2D currentPos(0, 0);
             for (size_t i = 0; i < elem.path.commands.size(); i++) {
@@ -1628,7 +1570,6 @@ namespace VCX::Labs::SVG {
                     Point2D p2 = cmd.relative ? currentPos + cmd.points[1] : cmd.points[1];
                     Point2D p3 = cmd.relative ? currentPos + cmd.points[2] : cmd.points[2];
                     
-                    // 转换为屏幕坐标
                     Point2D screenP1 = SVGToScreen(p1);
                     Point2D screenP2 = SVGToScreen(p2);
                     

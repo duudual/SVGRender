@@ -128,7 +128,6 @@ Common::ImageRGB SVGRenderer::RenderSVG(const SVGDocument& document,
         }
     }
 
-    // 应用viewBox变换
     float vbX, vbY, vbW, vbH;
     if (document.ParseViewBox(vbX, vbY, vbW, vbH)) {
         _scaleX = static_cast<float>(width) / vbW;
@@ -142,7 +141,6 @@ Common::ImageRGB SVGRenderer::RenderSVG(const SVGDocument& document,
         _offsetY = 0.0f;
     }
 
-    // 渲染所有元素
     for (const auto& element : document.elements) {
         RenderElement(element, image);
     }
