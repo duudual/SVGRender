@@ -3,6 +3,7 @@
 #include <cmath>
 #include <iostream>
 #include <vector>
+#include <limits>
 
 namespace VCX::Labs::SVG {
 
@@ -166,12 +167,14 @@ void SVGRenderer::RenderElement(const SVGElement& element,
 }
 
 void SVGRenderer::RenderPath(const SVGPath& path, Common::ImageRGB& image) {
-    auto vertices = path.GetVertices();
-
-    if (vertices.empty()) return;
+    // 获取所有子路径
+    auto subPaths = path.GetSubPaths();
+    
+    if (subPaths.empty()) return;
 
     // 计算填充和描边颜色
-    glm::vec4 fillColor(0, 0, 0, 0); // 默认透明
+    // 根据SVG规范，默认fill是黑色(#000000)，除非显式设置为none
+    glm::vec4 fillColor(0, 0, 0, 1); // SVG默认fill为黑色
     if (path.style.fillColor) {
         fillColor = *path.style.fillColor;
         if (path.style.fillOpacity) {
@@ -180,6 +183,9 @@ void SVGRenderer::RenderPath(const SVGPath& path, Common::ImageRGB& image) {
         if (path.style.opacity) {
             fillColor.a *= *path.style.opacity;
         }
+    } else if (path.style.fillNone) {
+        // 如果显式设置了fill="none"，则不填充
+        fillColor = glm::vec4(0, 0, 0, 0);
     }
 
     glm::vec4 strokeColor(0, 0, 0, 0); // 默认透明
@@ -195,20 +201,21 @@ void SVGRenderer::RenderPath(const SVGPath& path, Common::ImageRGB& image) {
 
     float strokeWidth = path.style.strokeWidth.value_or(1.0f);
 
-    // 检查路径是否闭合
-    bool closed = false;
-    if (!path.commands.empty() && path.commands.back().type == PathCommandType::ClosePath) {
-        closed = true;
+    // 判断填充规则：默认为NonZero
+    bool useNonZeroRule = true;
+    if (path.style.fillRule.has_value() && path.style.fillRule.value() == "evenodd") {
+        useNonZeroRule = false;
     }
 
-    // 渲染路径
-    DrawPath(image, vertices, fillColor, strokeColor, strokeWidth, closed);
+    // 使用支持多子路径的渲染方法
+    DrawPathWithSubPaths(image, subPaths, fillColor, strokeColor, strokeWidth, useNonZeroRule);
 }
 
 void SVGRenderer::RenderCircle(const SVGCircle& circle, Common::ImageRGB& image) {
     Point2D center = circle.transform.TransformPoint(circle.center);
 
-    glm::vec4 fillColor(0, 0, 0, 0);
+    // 根据SVG规范，默认fill是黑色
+    glm::vec4 fillColor(0, 0, 0, 1);
     if (circle.style.fillColor) {
         fillColor = *circle.style.fillColor;
         if (circle.style.fillOpacity) {
@@ -217,6 +224,8 @@ void SVGRenderer::RenderCircle(const SVGCircle& circle, Common::ImageRGB& image)
         if (circle.style.opacity) {
             fillColor.a *= *circle.style.opacity;
         }
+    } else if (circle.style.fillNone) {
+        fillColor = glm::vec4(0, 0, 0, 0);
     }
 
     glm::vec4 strokeColor(0, 0, 0, 0);
@@ -244,7 +253,8 @@ void SVGRenderer::RenderCircle(const SVGCircle& circle, Common::ImageRGB& image)
 void SVGRenderer::RenderEllipse(const SVGEllipse& ellipse, Common::ImageRGB& image) {
     Point2D center = ellipse.transform.TransformPoint(ellipse.center);
 
-    glm::vec4 fillColor(0, 0, 0, 0);
+    // 根据SVG规范，默认fill是黑色
+    glm::vec4 fillColor(0, 0, 0, 1);
     if (ellipse.style.fillColor) {
         fillColor = *ellipse.style.fillColor;
         if (ellipse.style.fillOpacity) {
@@ -253,6 +263,8 @@ void SVGRenderer::RenderEllipse(const SVGEllipse& ellipse, Common::ImageRGB& ima
         if (ellipse.style.opacity) {
             fillColor.a *= *ellipse.style.opacity;
         }
+    } else if (ellipse.style.fillNone) {
+        fillColor = glm::vec4(0, 0, 0, 0);
     }
 
     glm::vec4 strokeColor(0, 0, 0, 0);
@@ -304,7 +316,8 @@ void SVGRenderer::RenderEllipse(const SVGEllipse& ellipse, Common::ImageRGB& ima
 void SVGRenderer::RenderRect(const SVGRect& rect, Common::ImageRGB& image) {
     Point2D position = rect.transform.TransformPoint(rect.position);
 
-    glm::vec4 fillColor(0, 0, 0, 0);
+    // 根据SVG规范，默认fill是黑色
+    glm::vec4 fillColor(0, 0, 0, 1);
     if (rect.style.fillColor) {
         fillColor = *rect.style.fillColor;
         if (rect.style.fillOpacity) {
@@ -313,6 +326,8 @@ void SVGRenderer::RenderRect(const SVGRect& rect, Common::ImageRGB& image) {
         if (rect.style.opacity) {
             fillColor.a *= *rect.style.opacity;
         }
+    } else if (rect.style.fillNone) {
+        fillColor = glm::vec4(0, 0, 0, 0);
     }
 
     glm::vec4 strokeColor(0, 0, 0, 0);
@@ -549,6 +564,119 @@ void SVGRenderer::DrawPath(Common::ImageRGB& image,
         }
         if (closed && points.size() > 2) {
             DrawLine(image, points.back(), points[0], strokeColor, strokeWidth);
+        }
+    }
+}
+
+void SVGRenderer::DrawPathWithSubPaths(Common::ImageRGB& image,
+                                       const std::vector<std::vector<Point2D>>& subPaths,
+                                       const glm::vec4& fillColor, const glm::vec4& strokeColor,
+                                       float strokeWidth, bool useNonZeroRule) {
+    if (subPaths.empty()) return;
+
+    // 1. 绘制填充（使用NonZero或EvenOdd规则）
+    if (fillColor.a > 0) {
+        // 计算所有子路径的边界
+        float minY = std::numeric_limits<float>::max();
+        float maxY = std::numeric_limits<float>::lowest();
+        float minX = std::numeric_limits<float>::max();
+        float maxX = std::numeric_limits<float>::lowest();
+        
+        for (const auto& path : subPaths) {
+            for (const auto& p : path) {
+                minY = std::min(minY, p.y);
+                maxY = std::max(maxY, p.y);
+                minX = std::min(minX, p.x);
+                maxX = std::max(maxX, p.x);
+            }
+        }
+
+        int iMinY = std::max(0, static_cast<int>(std::floor(minY)));
+        int iMaxY = std::min(static_cast<int>(image.GetSizeY()) - 1, static_cast<int>(std::ceil(maxY)));
+
+        // 扫描线填充
+        for (int y = iMinY; y <= iMaxY; y++) {
+            float scanY = static_cast<float>(y) + 0.5f;
+            
+            // 收集所有子路径与扫描线的交点，同时记录方向
+            std::vector<std::pair<float, int>> intersections; // (x, direction)
+            
+            for (const auto& path : subPaths) {
+                if (path.size() < 2) continue;
+                
+                for (size_t i = 0; i < path.size(); i++) {
+                    Point2D p1 = path[i];
+                    Point2D p2 = path[(i + 1) % path.size()];
+                    
+                    // 检查边是否与扫描线相交
+                    if ((p1.y <= scanY && p2.y > scanY) || (p2.y <= scanY && p1.y > scanY)) {
+                        float x = p1.x + (scanY - p1.y) * (p2.x - p1.x) / (p2.y - p1.y);
+                        // 方向：向上为+1，向下为-1
+                        int direction = (p2.y > p1.y) ? 1 : -1;
+                        intersections.push_back({x, direction});
+                    }
+                }
+            }
+            
+            // 按x坐标排序
+            std::sort(intersections.begin(), intersections.end(),
+                [](const auto& a, const auto& b) { return a.first < b.first; });
+            
+            if (useNonZeroRule) {
+                // NonZero填充规则：跟踪winding number，非零时填充
+                int windingNumber = 0;
+                float fillStart = 0;
+                bool inFill = false;
+                
+                for (size_t i = 0; i < intersections.size(); i++) {
+                    float x = intersections[i].first;
+                    int dir = intersections[i].second;
+                    
+                    bool wasInFill = (windingNumber != 0);
+                    windingNumber += dir;
+                    bool nowInFill = (windingNumber != 0);
+                    
+                    if (!wasInFill && nowInFill) {
+                        // 开始填充区域
+                        fillStart = x;
+                        inFill = true;
+                    } else if (wasInFill && !nowInFill) {
+                        // 结束填充区域
+                        int xStart = std::max(0, static_cast<int>(std::ceil(fillStart)));
+                        int xEnd = std::min(static_cast<int>(image.GetSizeX()) - 1, 
+                                           static_cast<int>(std::floor(x)));
+                        for (int px = xStart; px <= xEnd; px++) {
+                            BlendPixel(image, px, y, fillColor);
+                        }
+                        inFill = false;
+                    }
+                }
+            } else {
+                // EvenOdd填充规则 - 简单地在奇数交点对之间填充
+                for (size_t i = 0; i + 1 < intersections.size(); i += 2) {
+                    int xStart = std::max(0, static_cast<int>(std::ceil(intersections[i].first)));
+                    int xEnd = std::min(static_cast<int>(image.GetSizeX()) - 1, 
+                                       static_cast<int>(std::floor(intersections[i+1].first)));
+                    for (int x = xStart; x <= xEnd; x++) {
+                        BlendPixel(image, x, y, fillColor);
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. 绘制描边
+    if (strokeColor.a > 0) {
+        for (const auto& path : subPaths) {
+            if (path.size() < 2) continue;
+            
+            for (size_t i = 0; i < path.size() - 1; i++) {
+                DrawLine(image, path[i], path[i + 1], strokeColor, strokeWidth);
+            }
+            // 闭合路径
+            if (path.size() > 2) {
+                DrawLine(image, path.back(), path[0], strokeColor, strokeWidth);
+            }
         }
     }
 }

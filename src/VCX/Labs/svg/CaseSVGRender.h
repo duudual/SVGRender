@@ -11,8 +11,19 @@
 #include "SVG.h"
 #include "SVGParser.h"
 #include "SVGRenderer.h"
+#include "Renderer/SVGRendererV2.h"
+#include "Rasterizer/ScanlineRasterizer.h"
 
 namespace VCX::Labs::SVG {
+
+    // V2 渲染器设置
+    struct RendererV2Settings {
+        bool useV2Renderer = false;        // 是否使用V2渲染器
+        bool enableAntiAliasing = true;    // 启用抗锯齿
+        int  aaSampleCount = 4;            // AA采样数: 1, 4, 8, 16
+        float flatnessTolerance = 0.5f;    // 曲线细分容差
+        bool showComparison = false;       // 显示对比模式
+    };
 
     // 元素边界框结构
     struct ElementBounds {
@@ -69,6 +80,8 @@ namespace VCX::Labs::SVG {
         SVGDocument _svgDocument;
         SVGParser _svgParser;
         SVGRenderer _svgRenderer;
+        SVGRendererV2 _svgRendererV2;          // V2 高质量渲染器
+        RendererV2Settings _v2Settings;        // V2 渲染器设置
 
         Engine::GL::UniqueTexture2D _texture;
         Common::ImageRGB _image;
@@ -110,6 +123,13 @@ namespace VCX::Labs::SVG {
         float _gridSize = 50.0f;
         float _zoomLevel = 1.0f;
         ImVec4 _backgroundColor = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+        int _currentTab = 0;  // 当前选中的标签页：0=Settings, 1=Layers, 2=Inspector
+
+        // V2渲染器设置
+        bool _useV2Renderer = false;       // 是否使用V2渲染器
+        bool _enableAntiAliasing = true;   // 启用抗锯齿
+        int _aaMode = 1;                   // AA模式: 0=None, 1=4x, 2=8x, 3=16x, 4=Analytical
+        float _flatnessTolerance = 0.5f;   // 曲线细分容差
 
         // 辅助函数
         void LoadSVGFile();
@@ -118,6 +138,8 @@ namespace VCX::Labs::SVG {
         void UpdateTextFromSVG();
         void UpdateRender();
         void ClearCanvas();
+        void UpdateBackgroundInSVG();
+        void AddNewElement(SVGElement::Type type);
         
         // 交互辅助
         int FindElementAtPosition(float x, float y);
@@ -126,6 +148,16 @@ namespace VCX::Labs::SVG {
         void MoveElement(int index, float dx, float dy);
         void ResizeElement(int index, ControlPointType type, float dx, float dy);
         void MoveControlPoint(int index, float dx, float dy);
+        
+        // 坐标转换辅助（SVG坐标 <-> 渲染/屏幕坐标）
+        Point2D SVGToScreen(const Point2D& svgPoint) const;
+        Point2D ScreenToSVG(const Point2D& screenPoint) const;
+        void UpdateViewBoxTransform();  // 更新viewBox变换参数
+        
+        // ViewBox 变换参数（缓存）
+        float _vbOffsetX = 0.0f, _vbOffsetY = 0.0f;
+        float _vbScaleX = 1.0f, _vbScaleY = 1.0f;
+        bool _hasViewBox = false;
         
         // 拖拽处理
         void StartDrag(float x, float y);
@@ -138,6 +170,8 @@ namespace VCX::Labs::SVG {
         void DrawPropertiesPanel();
         void DrawLayersPanel();
         void DrawCodeEditor();
+        void DrawAddElementPanel();  // 新增：添加元素面板
+        
 
     public:
         bool _showControlPoints = true;
@@ -150,7 +184,9 @@ namespace VCX::Labs::SVG {
 
         virtual std::string_view const GetName() override { return "SVG Interactive Editor"; }
 
-        virtual void OnSetupPropsUI() override;
+        virtual void OnSetupPropsUI() override;  // 标签栏按钮
+        virtual void OnSetupPropsContent() override;  // 标签内容
+        virtual void OnSetupCodeUI() override;  // 新增：代码编辑器UI
         virtual Common::CaseRenderResult OnRender(std::pair<std::uint32_t, std::uint32_t> const desiredSize) override;
         virtual void OnProcessInput(ImVec2 const & pos) override;
 

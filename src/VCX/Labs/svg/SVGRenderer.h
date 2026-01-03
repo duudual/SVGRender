@@ -51,6 +51,12 @@ private:
                  const std::vector<Point2D>& points,
                  const glm::vec4& fillColor, const glm::vec4& strokeColor,
                  float strokeWidth = 1.0f, bool closed = false);
+    
+    // 使用NonZero填充规则渲染包含多个子路径的复杂路径
+    void DrawPathWithSubPaths(Common::ImageRGB& image,
+                              const std::vector<std::vector<Point2D>>& subPaths,
+                              const glm::vec4& fillColor, const glm::vec4& strokeColor,
+                              float strokeWidth = 1.0f, bool useNonZeroRule = true);
 
     // 像素操作
     void SetPixel(Common::ImageRGB& image, int x, int y, const glm::vec4& color);

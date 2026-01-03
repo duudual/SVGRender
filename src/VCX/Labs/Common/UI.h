@@ -37,6 +37,9 @@ namespace VCX::Labs::Common {
             ImVec2 UserChildPosition;
             ImVec2 UserChildSize;
 
+            ImVec2 CodeWindowPosition;  // 新增：代码窗口位置
+            ImVec2 CodeWindowSize;      // 新增：代码窗口大小
+
             ImVec2 MainWindowPosition;
             ImVec2 MainWindowSize;
             ImVec2 ContentChildPosition;
@@ -48,6 +51,7 @@ namespace VCX::Labs::Common {
 
     private:
         std::size_t setupSideWindow(std::span<std::reference_wrapper<Common::ICase>> cases, std::size_t const caseId);
+        void setupCodeWindow(Common::ICase & casei);  // 新增：设置代码窗口
         void setupMainWindow(Common::ICase & casei);
 
         void updateStyle();

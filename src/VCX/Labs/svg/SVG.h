@@ -22,6 +22,15 @@ struct SVGStyle {
     std::optional<float>     fillOpacity;      // Fill opacity
     std::optional<float>     strokeOpacity;    // Stroke opacity
     std::optional<std::string> fillRule;       // "evenodd" or "nonzero"
+    bool fillNone = false;                     // 显式设置fill="none"
+    bool strokeNone = false;                   // 显式设置stroke="none"
+    
+    // Stroke styling (V2 renderer)
+    std::optional<std::string> strokeLineCap;  // "butt", "round", "square"
+    std::optional<std::string> strokeLineJoin; // "miter", "round", "bevel"
+    std::optional<float>     strokeMiterLimit; // Miter limit ratio (default 4)
+    std::optional<std::vector<float>> strokeDashArray;  // Dash pattern
+    std::optional<float>     strokeDashOffset; // Dash offset
 };
 
 // 2D点结构
@@ -105,6 +114,9 @@ struct SVGPath {
 
     // 获取所有顶点（用于渲染）
     std::vector<Point2D> GetVertices() const;
+    
+    // 获取所有子路径（每个子路径是一个独立的多边形）
+    std::vector<std::vector<Point2D>> GetSubPaths() const;
 };
 
 // SVG圆形元素
@@ -171,7 +183,18 @@ struct SVGElement {
     Transform2D transform;
     std::vector<SVGElement> children;  // 用于group元素
 
-    SVGElement(Type t) : type(t) {}
+    SVGElement(Type t) : type(t) {
+        // 根据类型初始化对应的union成员
+        switch (type) {
+            case Path:    new (&path)    SVGPath();    break;
+            case Circle:  new (&circle)  SVGCircle();  break;
+            case Ellipse: new (&ellipse) SVGEllipse(); break;
+            case Rect:    new (&rect)    SVGRect();    break;
+            case Line:    new (&line)    SVGLine();    break;
+            case Text:    new (&text)    SVGText();    break;
+            case Group:   /* no union member for group */ break;
+        }
+    }
 
     // Non-copyable due to manual union management
     SVGElement(SVGElement const &) = delete;

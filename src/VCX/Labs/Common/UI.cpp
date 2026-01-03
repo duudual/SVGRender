@@ -31,6 +31,7 @@ namespace VCX::Labs::Common {
         if (! _layout.SideWindowHidden)
             newCaseId = setupSideWindow(cases, caseId);
 
+        setupCodeWindow(cases[caseId]);  // 新增：设置代码窗口
         setupMainWindow(cases[caseId]);
         
         if (caseId != newCaseId)
@@ -62,28 +63,14 @@ namespace VCX::Labs::Common {
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + _layout.Spacing * 6);
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + _layout.Spacing * 3);
         ImGui::AlignTextToFramePadding();
-        ImGui::Text("EXPLORER");
-
-        ImGui::SetCursorScreenPos(_layout.CaseChildPosition);
-        ImGui::BeginChild("Case Child", _layout.CaseChildSize);
-        ImGui::PushStyleVar(ImGuiStyleVar_SelectableTextAlign, { .0f, .5f });
-        for (std::size_t i = 0; i < cases.size(); ++i) {
-            if (ImGui::Selectable(
-                    (fmt::format("     Case {}: {}", i + 1, cases[i].get().GetName()) + '\0').c_str(),
-                    caseId == i,
-                    0,
-                    ImVec2(0, ImGui::GetTextLineHeight() + 3 * _style.FramePadding.y)))
-                newCaseId = i;
-        }
-        ImGui::PopStyleVar();
-        ImGui::EndChild();
-
-        ImGui::Separator();
-
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + _layout.Spacing * 6);
-        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + _layout.Spacing * 3);
-        ImGui::AlignTextToFramePadding();
         ImGui::Text("PROPERTIES");
+        
+        // 在PROPERTIES旁边显示标签栏
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + _layout.Spacing * 4);
+        
+        // 标签栏直接在窗口中，不在子窗口内
+        cases[caseId].get().OnSetupPropsUI();
 
         ImGui::SetCursorScreenPos(_layout.UserChildPosition);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { _style.FramePadding.x * 2, 0 });
@@ -93,7 +80,8 @@ namespace VCX::Labs::Common {
         ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, { _style.FramePadding.x * 2, _style.FramePadding.y * 2 });
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { _style.FramePadding.x * 2, _style.FramePadding.y * 2 });
 
-        cases[caseId].get().OnSetupPropsUI();
+        // 内容区域通过新接口获取
+        cases[caseId].get().OnSetupPropsContent();
 
         ImGui::PopStyleVar(4);
         ImGui::EndChild();
@@ -103,6 +91,44 @@ namespace VCX::Labs::Common {
         ImGui::PopStyleColor(2);
 
         return newCaseId;
+    }
+
+    void UI::setupCodeWindow(Common::ICase & casei) {
+        if (_layout.CodeWindowSize.x <= 0 || _layout.CodeWindowSize.y <= 0) {
+            return;  // 如果代码窗口被隐藏，直接返回
+        }
+
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, 0xFF262525);
+        ImGui::PushStyleColor(ImGuiCol_ScrollbarBg, 0xFF262525);
+        ImGui::SetNextWindowPos(_layout.CodeWindowPosition);
+        ImGui::SetNextWindowSize(_layout.CodeWindowSize);
+        // clang-format off
+        ImGui::Begin(
+            "Code Window", nullptr,
+            ImGuiWindowFlags_NoTitleBar |
+            ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoCollapse);
+        // clang-format on
+
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + _layout.Spacing * 6);
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + _layout.Spacing * 3);
+        ImGui::AlignTextToFramePadding();
+        ImGui::Text("SVG SOURCE CODE");
+
+        ImGui::SetCursorPosX(_layout.Spacing * 2);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { _style.FramePadding.x * 2, _style.FramePadding.y * 2 });
+        float childHeight = _layout.CodeWindowSize.y - ImGui::GetCursorPosY() - _layout.Spacing * 2;
+        ImGui::BeginChild("Code Child", ImVec2(_layout.CodeWindowSize.x - _layout.Spacing * 4, childHeight), false, 
+            ImGuiWindowFlags_AlwaysUseWindowPadding | ImGuiWindowFlags_HorizontalScrollbar);
+        
+        casei.OnSetupCodeUI();
+        
+        ImGui::EndChild();
+        ImGui::PopStyleVar();
+
+        ImGui::End();
+        ImGui::PopStyleColor(2);
     }
 
     void UI::setupMainWindow(Common::ICase & casei) {
@@ -175,7 +201,7 @@ namespace VCX::Labs::Common {
                 "Content Child",
                 { _layout.ContentChildSize.x - _style.ScrollbarSize, _layout.ContentChildSize.y - _style.ScrollbarSize },
                 false,
-                ImGuiWindowFlags_AlwaysHorizontalScrollbar | ImGuiWindowFlags_AlwaysVerticalScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+                ImGuiWindowFlags_AlwaysHorizontalScrollbar | ImGuiWindowFlags_AlwaysVerticalScrollbar);
         } else {
             canvasRelativePosition = { 0, 0 };
             ImGui::SetCursorScreenPos(_layout.ContentChildPosition);
@@ -183,7 +209,7 @@ namespace VCX::Labs::Common {
                 "Content Child",
                 _layout.ContentChildSize,
                 false,
-                ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+                ImGuiWindowFlags_NoScrollbar);
         }
 
         ImGui::SetCursorPos(canvasRelativePosition);
@@ -251,10 +277,12 @@ namespace VCX::Labs::Common {
             _layout.CaseChildSize     = { 0, 0 };
             _layout.UserChildPosition = { 0, 0 };
             _layout.UserChildSize     = { 0, 0 };
+            _layout.CodeWindowPosition = { 0, 0 };
+            _layout.CodeWindowSize = { 0, 0 };
         } else {
             _layout.SideWindowSize = {
                 std::floor(_options.SideWindowWidth * _scaleUI),
-                1.f * windowHeight
+                std::floor(windowHeight * 0.5f)  // Properties窗口占上半部分
             };
             _layout.CaseChildPosition = {
                 _layout.SideWindowPosition.x,
@@ -264,13 +292,24 @@ namespace VCX::Labs::Common {
                 _layout.SideWindowSize.x,
                 std::floor(_layout.SideWindowSize.y * .5f) - _layout.CaseChildPosition.y
             };
+            // UserChild的位置需要在标签按钮下方，为标签按钮预留35像素空间
             _layout.UserChildPosition = {
                 _layout.SideWindowPosition.x,
-                _layout.CaseChildPosition.y + _layout.CaseChildSize.y + fontSize + 2 * framePadding.y + 6 * _layout.Spacing
+                _layout.SideWindowPosition.y + fontSize + 2 * framePadding.y + 6 * _layout.Spacing 
             };
-            _layout.CaseChildSize = {
+            _layout.UserChildSize = {
                 _layout.SideWindowSize.x,
-                _layout.SideWindowSize.y - _layout.UserChildPosition.y
+                _layout.SideWindowSize.y - _layout.UserChildPosition.y + 20 * _scaleUI
+            };
+
+            // 新增：Code Window在左下角
+            _layout.CodeWindowPosition = {
+                0,
+                _layout.SideWindowSize.y 
+            };
+            _layout.CodeWindowSize = {
+                std::floor(_options.SideWindowWidth * _scaleUI),
+                windowHeight - _layout.SideWindowSize.y
             };
         }
         _layout.MainWindowPosition = {

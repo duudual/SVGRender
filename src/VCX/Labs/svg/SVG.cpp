@@ -11,7 +11,8 @@ std::vector<Point2D> SVGPath::GetVertices() const {
     Point2D currentPos(0, 0);
     Point2D startPos(0, 0);
 
-    for (const auto& cmd : commands) {
+    for (size_t cmdIdx = 0; cmdIdx < commands.size(); ++cmdIdx) {
+        const auto& cmd = commands[cmdIdx];
         switch (cmd.type) {
             case PathCommandType::MoveTo: {
                 if (!cmd.points.empty()) {
@@ -44,8 +45,8 @@ std::vector<Point2D> SVGPath::GetVertices() const {
                     Point2D p2 = cmd.relative ? currentPos + cmd.points[1] : cmd.points[1];
                     Point2D p3 = cmd.relative ? currentPos + cmd.points[2] : cmd.points[2];
 
-                    // 使用20个采样点生成平滑曲线
-                    const int segments = 20;
+                    // 使用100个采样点生成平滑曲线
+                    const int segments = 100;
                     for (int i = 1; i <= segments; i++) {
                         float t = static_cast<float>(i) / segments;
                         float t2 = t * t;
@@ -104,6 +105,112 @@ std::vector<Point2D> SVGPath::GetVertices() const {
     }
 
     return vertices;
+}
+
+// SVGPath::GetSubPaths() 实现 - 将路径分割为多个子路径
+std::vector<std::vector<Point2D>> SVGPath::GetSubPaths() const {
+    std::vector<std::vector<Point2D>> subPaths;
+    std::vector<Point2D> currentPath;
+    Point2D currentPos(0, 0);
+    Point2D startPos(0, 0);
+
+    for (const auto& cmd : commands) {
+        switch (cmd.type) {
+            case PathCommandType::MoveTo: {
+                // 新的MoveTo开始一个新的子路径
+                if (!currentPath.empty()) {
+                    subPaths.push_back(std::move(currentPath));
+                    currentPath.clear();
+                }
+                if (!cmd.points.empty()) {
+                    Point2D target = cmd.relative ? currentPos + cmd.points[0] : cmd.points[0];
+                    currentPos = target;
+                    startPos = target;
+                    currentPath.push_back(transform.TransformPoint(target));
+                }
+                break;
+            }
+            case PathCommandType::LineTo: {
+                if (!cmd.points.empty()) {
+                    Point2D target = cmd.relative ? currentPos + cmd.points[0] : cmd.points[0];
+                    currentPos = target;
+                    currentPath.push_back(transform.TransformPoint(target));
+                }
+                break;
+            }
+            case PathCommandType::ClosePath: {
+                currentPos = startPos;
+                if (!currentPath.empty()) {
+                    currentPath.push_back(transform.TransformPoint(startPos));
+                }
+                break;
+            }
+            case PathCommandType::CurveTo: {
+                if (cmd.points.size() >= 3) {
+                    Point2D p0 = currentPos;
+                    Point2D p1 = cmd.relative ? currentPos + cmd.points[0] : cmd.points[0];
+                    Point2D p2 = cmd.relative ? currentPos + cmd.points[1] : cmd.points[1];
+                    Point2D p3 = cmd.relative ? currentPos + cmd.points[2] : cmd.points[2];
+
+                    const int segments = 100;
+                    for (int i = 1; i <= segments; i++) {
+                        float t = static_cast<float>(i) / segments;
+                        float t2 = t * t;
+                        float t3 = t2 * t;
+                        float mt = 1.0f - t;
+                        float mt2 = mt * mt;
+                        float mt3 = mt2 * mt;
+
+                        Point2D point(
+                            mt3 * p0.x + 3 * mt2 * t * p1.x + 3 * mt * t2 * p2.x + t3 * p3.x,
+                            mt3 * p0.y + 3 * mt2 * t * p1.y + 3 * mt * t2 * p2.y + t3 * p3.y
+                        );
+                        currentPath.push_back(transform.TransformPoint(point));
+                    }
+                    currentPos = p3;
+                }
+                break;
+            }
+            case PathCommandType::QuadCurveTo: {
+                if (cmd.points.size() >= 2) {
+                    Point2D p0 = currentPos;
+                    Point2D p1 = cmd.relative ? currentPos + cmd.points[0] : cmd.points[0];
+                    Point2D p2 = cmd.relative ? currentPos + cmd.points[1] : cmd.points[1];
+
+                    const int segments = 15;
+                    for (int i = 1; i <= segments; i++) {
+                        float t = static_cast<float>(i) / segments;
+                        float t2 = t * t;
+                        float mt = 1.0f - t;
+                        float mt2 = mt * mt;
+
+                        Point2D point(
+                            mt2 * p0.x + 2 * mt * t * p1.x + t2 * p2.x,
+                            mt2 * p0.y + 2 * mt * t * p1.y + t2 * p2.y
+                        );
+                        currentPath.push_back(transform.TransformPoint(point));
+                    }
+                    currentPos = p2;
+                }
+                break;
+            }
+            case PathCommandType::ArcTo: {
+                if (cmd.points.size() >= 2) {
+                    Point2D target = cmd.relative ? currentPos + cmd.points[1] : cmd.points[1];
+                    currentPath.push_back(transform.TransformPoint(target));
+                    currentPos = target;
+                }
+                break;
+            }
+        }
+    }
+
+    // 添加最后一个子路径
+    if (!currentPath.empty()) {
+        subPaths.push_back(std::move(currentPath));
+    }
+
+    return subPaths;
 }
 
 // SVGDocument::ParseViewBox() 实现

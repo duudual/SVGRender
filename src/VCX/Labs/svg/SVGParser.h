@@ -37,6 +37,9 @@ private:
     bool ParseTextElement(tinyxml2::XMLElement* element, SVGElement& svgElement);
     bool ParseGroupElement(tinyxml2::XMLElement* element, SVGElement& svgElement);
 
+    // 递归解析<g>标签并将所有子元素展平添加到document.elements
+    void ParseGroupElementFlattened(tinyxml2::XMLElement* element, SVGDocument& document, const Transform2D& parentTransform, const SVGStyle& parentStyle);
+
     // 解析样式和属性
     SVGStyle ParseStyle(tinyxml2::XMLElement* element);
     Transform2D ParseTransform(const std::string& transformStr);
