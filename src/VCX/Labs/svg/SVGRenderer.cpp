@@ -128,6 +128,20 @@ Common::ImageRGB SVGRenderer::RenderSVG(const SVGDocument& document,
         }
     }
 
+    // 应用viewBox变换
+    float vbX, vbY, vbW, vbH;
+    if (document.ParseViewBox(vbX, vbY, vbW, vbH)) {
+        _scaleX = static_cast<float>(width) / vbW;
+        _scaleY = static_cast<float>(height) / vbH;
+        _offsetX = -vbX * _scaleX;
+        _offsetY = -vbY * _scaleY;
+    } else {
+        _scaleX = 1.0f;
+        _scaleY = 1.0f;
+        _offsetX = 0.0f;
+        _offsetY = 0.0f;
+    }
+
     // 渲染所有元素
     for (const auto& element : document.elements) {
         RenderElement(element, image);
@@ -167,10 +181,17 @@ void SVGRenderer::RenderElement(const SVGElement& element,
 }
 
 void SVGRenderer::RenderPath(const SVGPath& path, Common::ImageRGB& image) {
-    // 获取所有子路径
-    auto subPaths = path.GetSubPaths();
+    // 获取所有子路径（包含闭合信息）
+    auto subPaths = path.GetSubPathsWithClosedInfo();
     
     if (subPaths.empty()) return;
+
+    // 对所有子路径的点应用viewBox变换
+    for (auto& sp : subPaths) {
+        for (auto& pt : sp.points) {
+            pt = TransformPoint(pt);
+        }
+    }
 
     // 计算填充和描边颜色
     // 根据SVG规范，默认fill是黑色(#000000)，除非显式设置为none
@@ -199,7 +220,7 @@ void SVGRenderer::RenderPath(const SVGPath& path, Common::ImageRGB& image) {
         }
     }
 
-    float strokeWidth = path.style.strokeWidth.value_or(1.0f);
+    float strokeWidth = path.style.strokeWidth.value_or(1.0f) * _scaleX;
 
     // 判断填充规则：默认为NonZero
     bool useNonZeroRule = true;
@@ -208,11 +229,14 @@ void SVGRenderer::RenderPath(const SVGPath& path, Common::ImageRGB& image) {
     }
 
     // 使用支持多子路径的渲染方法
-    DrawPathWithSubPaths(image, subPaths, fillColor, strokeColor, strokeWidth, useNonZeroRule);
+    DrawPathWithSubPathsEx(image, subPaths, fillColor, strokeColor, strokeWidth, useNonZeroRule);
 }
 
 void SVGRenderer::RenderCircle(const SVGCircle& circle, Common::ImageRGB& image) {
     Point2D center = circle.transform.TransformPoint(circle.center);
+    // 应用viewBox变换
+    center = TransformPoint(center);
+    float radius = circle.radius * _scaleX; // 使用平均缩放
 
     // 根据SVG规范，默认fill是黑色
     glm::vec4 fillColor(0, 0, 0, 1);
@@ -241,17 +265,21 @@ void SVGRenderer::RenderCircle(const SVGCircle& circle, Common::ImageRGB& image)
 
     // 渲染填充
     if (fillColor.a > 0) {
-        DrawCircle(image, center, circle.radius, fillColor, true);
+        DrawCircle(image, center, radius, fillColor, true);
     }
 
     // 渲染描边
     if (strokeColor.a > 0 && circle.style.strokeWidth) {
-        DrawCircle(image, center, circle.radius, strokeColor, false);
+        DrawCircle(image, center, radius, strokeColor, false);
     }
 }
 
 void SVGRenderer::RenderEllipse(const SVGEllipse& ellipse, Common::ImageRGB& image) {
     Point2D center = ellipse.transform.TransformPoint(ellipse.center);
+    // 应用viewBox变换
+    center = TransformPoint(center);
+    float rx = ellipse.rx * _scaleX;
+    float ry = ellipse.ry * _scaleY;
 
     // 根据SVG规范，默认fill是黑色
     glm::vec4 fillColor(0, 0, 0, 1);
@@ -282,15 +310,15 @@ void SVGRenderer::RenderEllipse(const SVGEllipse& ellipse, Common::ImageRGB& ima
     // 实际实现应该使用椭圆光栅化算法
     int cx = static_cast<int>(center.x);
     int cy = static_cast<int>(center.y);
-    int rx = static_cast<int>(ellipse.rx);
-    int ry = static_cast<int>(ellipse.ry);
+    int irx = static_cast<int>(rx);
+    int iry = static_cast<int>(ry);
 
     if (fillColor.a > 0) {
         // 填充椭圆 - 简化为在椭圆边界内的像素
-        for (int y = cy - ry; y <= cy + ry; y++) {
-            for (int x = cx - rx; x <= cx + rx; x++) {
-                float dx = (x - cx) / static_cast<float>(rx);
-                float dy = (y - cy) / static_cast<float>(ry);
+        for (int y = cy - iry; y <= cy + iry; y++) {
+            for (int x = cx - irx; x <= cx + irx; x++) {
+                float dx = (x - cx) / rx;
+                float dy = (y - cy) / ry;
                 if (dx * dx + dy * dy <= 1.0f) {
                     SetPixel(image, x, y, fillColor);
                 }
@@ -300,10 +328,10 @@ void SVGRenderer::RenderEllipse(const SVGEllipse& ellipse, Common::ImageRGB& ima
 
     if (strokeColor.a > 0 && ellipse.style.strokeWidth) {
         // 描边椭圆 - 简化为椭圆轮廓
-        for (int y = cy - ry; y <= cy + ry; y++) {
-            for (int x = cx - rx; x <= cx + rx; x++) {
-                float dx = (x - cx) / static_cast<float>(rx);
-                float dy = (y - cy) / static_cast<float>(ry);
+        for (int y = cy - iry; y <= cy + iry; y++) {
+            for (int x = cx - irx; x <= cx + irx; x++) {
+                float dx = (x - cx) / rx;
+                float dy = (y - cy) / ry;
                 float dist = dx * dx + dy * dy;
                 if (dist >= 0.95f && dist <= 1.05f) {  // 椭圆边界附近
                     SetPixel(image, x, y, strokeColor);
@@ -315,6 +343,12 @@ void SVGRenderer::RenderEllipse(const SVGEllipse& ellipse, Common::ImageRGB& ima
 
 void SVGRenderer::RenderRect(const SVGRect& rect, Common::ImageRGB& image) {
     Point2D position = rect.transform.TransformPoint(rect.position);
+    // 应用viewBox变换
+    position = TransformPoint(position);
+    float width = rect.width * _scaleX;
+    float height = rect.height * _scaleY;
+    float rx = rect.rx * _scaleX;
+    float ry = rect.ry * _scaleY;
 
     // 根据SVG规范，默认fill是黑色
     glm::vec4 fillColor(0, 0, 0, 1);
@@ -343,18 +377,21 @@ void SVGRenderer::RenderRect(const SVGRect& rect, Common::ImageRGB& image) {
 
     // 渲染填充
     if (fillColor.a > 0) {
-        DrawRect(image, position, rect.width, rect.height, fillColor, true, rect.rx, rect.ry);
+        DrawRect(image, position, width, height, fillColor, true, rx, ry);
     }
 
     // 渲染描边
     if (strokeColor.a > 0 && rect.style.strokeWidth) {
-        DrawRect(image, position, rect.width, rect.height, strokeColor, false, rect.rx, rect.ry);
+        DrawRect(image, position, width, height, strokeColor, false, rx, ry);
     }
 }
 
 void SVGRenderer::RenderLine(const SVGLine& line, Common::ImageRGB& image) {
     Point2D start = line.transform.TransformPoint(line.start);
     Point2D end = line.transform.TransformPoint(line.end);
+    // 应用viewBox变换
+    start = TransformPoint(start);
+    end = TransformPoint(end);
 
     glm::vec4 strokeColor(0, 0, 0, 1);
     if (line.style.strokeColor) {
@@ -367,13 +404,15 @@ void SVGRenderer::RenderLine(const SVGLine& line, Common::ImageRGB& image) {
         }
     }
 
-    float strokeWidth = line.style.strokeWidth.value_or(1.0f);
+    float strokeWidth = line.style.strokeWidth.value_or(1.0f) * _scaleX;
 
     DrawLine(image, start, end, strokeColor, strokeWidth);
 }
 
 void SVGRenderer::RenderText(const SVGText& text, Common::ImageRGB& image) {
     Point2D position = text.transform.TransformPoint(text.position);
+    // 应用viewBox变换
+    position = TransformPoint(position);
 
     glm::vec4 fillColor(0, 0, 0, 1);
     if (text.style.fillColor) {
@@ -387,7 +426,7 @@ void SVGRenderer::RenderText(const SVGText& text, Common::ImageRGB& image) {
     }
 
     // 使用 5x7 字体渲染文本
-    float scale = text.fontSize / 7.0f;
+    float scale = text.fontSize * _scaleX / 7.0f;
     float xOffset = 0;
     for (char c : text.text) {
         if (c >= 32 && c <= 126) {
@@ -673,8 +712,113 @@ void SVGRenderer::DrawPathWithSubPaths(Common::ImageRGB& image,
             for (size_t i = 0; i < path.size() - 1; i++) {
                 DrawLine(image, path[i], path[i + 1], strokeColor, strokeWidth);
             }
-            // 闭合路径
+            // 闭合路径 - 这个方法没有闭合信息，总是闭合
             if (path.size() > 2) {
+                DrawLine(image, path.back(), path[0], strokeColor, strokeWidth);
+            }
+        }
+    }
+}
+
+void SVGRenderer::DrawPathWithSubPathsEx(Common::ImageRGB& image,
+                                         const std::vector<SubPath>& subPaths,
+                                         const glm::vec4& fillColor, const glm::vec4& strokeColor,
+                                         float strokeWidth, bool useNonZeroRule) {
+    if (subPaths.empty()) return;
+
+    // 1. 绘制填充（使用NonZero或EvenOdd规则）
+    if (fillColor.a > 0) {
+        // 计算所有子路径的边界
+        float minY = std::numeric_limits<float>::max();
+        float maxY = std::numeric_limits<float>::lowest();
+        float minX = std::numeric_limits<float>::max();
+        float maxX = std::numeric_limits<float>::lowest();
+        
+        for (const auto& subPath : subPaths) {
+            for (const auto& p : subPath.points) {
+                minY = std::min(minY, p.y);
+                maxY = std::max(maxY, p.y);
+                minX = std::min(minX, p.x);
+                maxX = std::max(maxX, p.x);
+            }
+        }
+
+        int iMinY = std::max(0, static_cast<int>(std::floor(minY)));
+        int iMaxY = std::min(static_cast<int>(image.GetSizeY()) - 1, static_cast<int>(std::ceil(maxY)));
+
+        // 扫描线填充
+        for (int y = iMinY; y <= iMaxY; y++) {
+            float scanY = static_cast<float>(y) + 0.5f;
+            
+            // 收集所有子路径与扫描线的交点，同时记录方向
+            std::vector<std::pair<float, int>> intersections;
+            
+            for (const auto& subPath : subPaths) {
+                const auto& path = subPath.points;
+                if (path.size() < 2) continue;
+                
+                for (size_t i = 0; i < path.size(); i++) {
+                    Point2D p1 = path[i];
+                    Point2D p2 = path[(i + 1) % path.size()];
+                    
+                    if ((p1.y <= scanY && p2.y > scanY) || (p2.y <= scanY && p1.y > scanY)) {
+                        float x = p1.x + (scanY - p1.y) * (p2.x - p1.x) / (p2.y - p1.y);
+                        int direction = (p2.y > p1.y) ? 1 : -1;
+                        intersections.push_back({x, direction});
+                    }
+                }
+            }
+            
+            std::sort(intersections.begin(), intersections.end(),
+                [](const auto& a, const auto& b) { return a.first < b.first; });
+            
+            if (useNonZeroRule) {
+                int windingNumber = 0;
+                float fillStart = 0;
+                
+                for (size_t i = 0; i < intersections.size(); i++) {
+                    float x = intersections[i].first;
+                    int dir = intersections[i].second;
+                    
+                    bool wasInFill = (windingNumber != 0);
+                    windingNumber += dir;
+                    bool nowInFill = (windingNumber != 0);
+                    
+                    if (!wasInFill && nowInFill) {
+                        fillStart = x;
+                    } else if (wasInFill && !nowInFill) {
+                        int xStart = std::max(0, static_cast<int>(std::ceil(fillStart)));
+                        int xEnd = std::min(static_cast<int>(image.GetSizeX()) - 1, 
+                                           static_cast<int>(std::floor(x)));
+                        for (int px = xStart; px <= xEnd; px++) {
+                            BlendPixel(image, px, y, fillColor);
+                        }
+                    }
+                }
+            } else {
+                for (size_t i = 0; i + 1 < intersections.size(); i += 2) {
+                    int xStart = std::max(0, static_cast<int>(std::ceil(intersections[i].first)));
+                    int xEnd = std::min(static_cast<int>(image.GetSizeX()) - 1, 
+                                       static_cast<int>(std::floor(intersections[i+1].first)));
+                    for (int x = xStart; x <= xEnd; x++) {
+                        BlendPixel(image, x, y, fillColor);
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. 绘制描边 - 使用闭合信息
+    if (strokeColor.a > 0) {
+        for (const auto& subPath : subPaths) {
+            const auto& path = subPath.points;
+            if (path.size() < 2) continue;
+            
+            for (size_t i = 0; i < path.size() - 1; i++) {
+                DrawLine(image, path[i], path[i + 1], strokeColor, strokeWidth);
+            }
+            // 只有闭合的子路径才连接首尾
+            if (subPath.closed && path.size() > 2) {
                 DrawLine(image, path.back(), path[0], strokeColor, strokeWidth);
             }
         }

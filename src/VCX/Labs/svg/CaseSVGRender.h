@@ -70,13 +70,12 @@ namespace VCX::Labs::SVG {
     // 工具类型
     enum class ToolType {
         Select,
-        Pan,
-        Zoom
     };
 
     class CaseSVGRender : public Common::ICase {
     private:
         std::string _svgFilePath = "assets/test_bezier.svg";
+        std::string _projectRoot;  // 项目根目录
         SVGDocument _svgDocument;
         SVGParser _svgParser;
         SVGRenderer _svgRenderer;

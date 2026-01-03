@@ -25,6 +25,12 @@ struct RenderContext {
     ScanlineRasterizer::AAMode aaMode = ScanlineRasterizer::AAMode::Coverage4x;
 };
 
+// 子路径结构（包含顶点和是否闭合）
+struct SubPathV2 {
+    std::vector<Vec2> points;
+    bool closed = false;
+};
+
 //=============================================================================
 // SVGRendererV2 - High-quality SVG Renderer
 //=============================================================================
@@ -65,6 +71,7 @@ private:
     // Path processing
     std::vector<Vec2> TessellatePath(const SVGPath& path, const Matrix3x3& transform);
     std::vector<std::vector<Vec2>> TessellatePathSubPaths(const SVGPath& path, const Matrix3x3& transform);
+    std::vector<SubPathV2> TessellatePathSubPathsEx(const SVGPath& path, const Matrix3x3& transform);
     std::vector<Vec2> GenerateCircleVertices(const Vec2& center, float radius, int segments = 64);
     std::vector<Vec2> GenerateEllipseVertices(const Vec2& center, float rx, float ry, int segments = 64);
     std::vector<Vec2> GenerateRoundedRectVertices(const Vec2& pos, float w, float h, float rx, float ry);
@@ -74,12 +81,16 @@ private:
                      FillRule fillRule, RenderContext& ctx);
     void FillSubPaths(const std::vector<std::vector<Vec2>>& subPaths, const glm::vec4& color,
                       FillRule fillRule, RenderContext& ctx);
+    void FillSubPathsEx(const std::vector<SubPathV2>& subPaths, const glm::vec4& color,
+                        FillRule fillRule, RenderContext& ctx);
     void FillPolygonWithPaint(const std::vector<Vec2>& polygon, const Paint& paint,
                               FillRule fillRule, RenderContext& ctx);
     void StrokePath(const std::vector<Vec2>& vertices, bool closed,
                     const glm::vec4& color, const StrokeStyle& style, RenderContext& ctx);
     void StrokeSubPaths(const std::vector<std::vector<Vec2>>& subPaths,
                         const glm::vec4& color, const StrokeStyle& style, RenderContext& ctx);
+    void StrokeSubPathsEx(const std::vector<SubPathV2>& subPaths,
+                          const glm::vec4& color, const StrokeStyle& style, RenderContext& ctx);
 
     // Pixel operations
     void BlendPixel(Common::ImageRGB& image, int x, int y, 
@@ -185,8 +196,8 @@ inline void SVGRendererV2::RenderPath(const SVGPath& path, RenderContext& ctx) {
     ctx.transformStack.Push();
     ctx.transformStack.Multiply(ConvertTransform(path.transform));
 
-    // Tessellate path into sub-paths (for complex paths with holes)
-    std::vector<std::vector<Vec2>> subPaths = TessellatePathSubPaths(path, ctx.transformStack.Current());
+    // Tessellate path into sub-paths with closed info
+    std::vector<SubPathV2> subPaths = TessellatePathSubPathsEx(path, ctx.transformStack.Current());
 
     if (subPaths.empty()) {
         ctx.transformStack.Pop();
@@ -196,14 +207,14 @@ inline void SVGRendererV2::RenderPath(const SVGPath& path, RenderContext& ctx) {
     // Get fill color and render fill
     glm::vec4 fillColor = GetFillColor(path.style);
     if (fillColor.a > 0) {
-        FillSubPaths(subPaths, fillColor, GetFillRule(path.style), ctx);
+        FillSubPathsEx(subPaths, fillColor, GetFillRule(path.style), ctx);
     }
 
     // Get stroke color and render stroke
     glm::vec4 strokeColor = GetStrokeColor(path.style);
     if (strokeColor.a > 0) {
         StrokeStyle strokeStyle = GetStrokeStyle(path.style);
-        StrokeSubPaths(subPaths, strokeColor, strokeStyle, ctx);
+        StrokeSubPathsEx(subPaths, strokeColor, strokeStyle, ctx);
     }
 
     ctx.transformStack.Pop();
@@ -615,6 +626,141 @@ inline std::vector<std::vector<Vec2>> SVGRendererV2::TessellatePathSubPaths(cons
     return subPaths;
 }
 
+inline std::vector<SubPathV2> SVGRendererV2::TessellatePathSubPathsEx(const SVGPath& path, const Matrix3x3& transform) {
+    std::vector<SubPathV2> subPaths;
+    SubPathV2 currentSubPath;
+    Vec2 currentPos(0, 0);
+    Vec2 startPos(0, 0);
+    Vec2 lastControlPoint(0, 0);
+
+    for (const auto& cmd : path.commands) {
+        switch (cmd.type) {
+            case PathCommandType::MoveTo: {
+                if (!currentSubPath.points.empty() && currentSubPath.points.size() >= 2) {
+                    subPaths.push_back(std::move(currentSubPath));
+                    currentSubPath = SubPathV2();
+                }
+                if (!cmd.points.empty()) {
+                    Vec2 target = cmd.relative 
+                        ? currentPos + Vec2(cmd.points[0].x, cmd.points[0].y)
+                        : Vec2(cmd.points[0].x, cmd.points[0].y);
+                    currentPos = target;
+                    startPos = target;
+                    currentSubPath.points.push_back(transform.TransformPoint(target));
+                }
+                break;
+            }
+
+            case PathCommandType::LineTo: {
+                if (!cmd.points.empty()) {
+                    Vec2 target = cmd.relative 
+                        ? currentPos + Vec2(cmd.points[0].x, cmd.points[0].y)
+                        : Vec2(cmd.points[0].x, cmd.points[0].y);
+                    currentPos = target;
+                    currentSubPath.points.push_back(transform.TransformPoint(target));
+                }
+                break;
+            }
+
+            case PathCommandType::CurveTo: {
+                if (cmd.points.size() >= 3) {
+                    Vec2 p0 = currentPos;
+                    Vec2 p1 = cmd.relative 
+                        ? currentPos + Vec2(cmd.points[0].x, cmd.points[0].y)
+                        : Vec2(cmd.points[0].x, cmd.points[0].y);
+                    Vec2 p2 = cmd.relative 
+                        ? currentPos + Vec2(cmd.points[1].x, cmd.points[1].y)
+                        : Vec2(cmd.points[1].x, cmd.points[1].y);
+                    Vec2 p3 = cmd.relative 
+                        ? currentPos + Vec2(cmd.points[2].x, cmd.points[2].y)
+                        : Vec2(cmd.points[2].x, cmd.points[2].y);
+
+                    std::vector<Vec2> curvePoints;
+                    Bezier::TessellateCubicAdaptive(p0, p1, p2, p3, _flatnessTolerance, curvePoints);
+                    
+                    for (const auto& p : curvePoints) {
+                        currentSubPath.points.push_back(transform.TransformPoint(p));
+                    }
+                    
+                    currentPos = p3;
+                    lastControlPoint = p2;
+                }
+                break;
+            }
+
+            case PathCommandType::QuadCurveTo: {
+                if (cmd.points.size() >= 2) {
+                    Vec2 p0 = currentPos;
+                    Vec2 p1 = cmd.relative 
+                        ? currentPos + Vec2(cmd.points[0].x, cmd.points[0].y)
+                        : Vec2(cmd.points[0].x, cmd.points[0].y);
+                    Vec2 p2 = cmd.relative 
+                        ? currentPos + Vec2(cmd.points[1].x, cmd.points[1].y)
+                        : Vec2(cmd.points[1].x, cmd.points[1].y);
+
+                    std::vector<Vec2> curvePoints;
+                    Bezier::TessellateQuadraticAdaptive(p0, p1, p2, _flatnessTolerance, curvePoints);
+                    
+                    for (const auto& p : curvePoints) {
+                        currentSubPath.points.push_back(transform.TransformPoint(p));
+                    }
+                    
+                    currentPos = p2;
+                    lastControlPoint = p1;
+                }
+                break;
+            }
+
+            case PathCommandType::ArcTo: {
+                if (cmd.points.size() >= 2) {
+                    Vec2 target = cmd.relative 
+                        ? currentPos + Vec2(cmd.points[1].x, cmd.points[1].y)
+                        : Vec2(cmd.points[1].x, cmd.points[1].y);
+                    
+                    float rx = std::abs(cmd.points[0].x);
+                    float ry = std::abs(cmd.points[0].y);
+                    
+                    if (rx > 0 && ry > 0) {
+                        std::vector<Vec2> arcControls;
+                        Bezier::ArcToCubics(currentPos, rx, ry, 0, false, true, target, arcControls);
+                        
+                        Vec2 cp0 = currentPos;
+                        for (size_t i = 0; i + 2 < arcControls.size(); i += 3) {
+                            std::vector<Vec2> curvePoints;
+                            Bezier::TessellateCubicAdaptive(cp0, arcControls[i], arcControls[i+1], 
+                                                            arcControls[i+2], _flatnessTolerance, curvePoints);
+                            for (const auto& p : curvePoints) {
+                                currentSubPath.points.push_back(transform.TransformPoint(p));
+                            }
+                            cp0 = arcControls[i+2];
+                        }
+                    }
+                    
+                    currentSubPath.points.push_back(transform.TransformPoint(target));
+                    currentPos = target;
+                }
+                break;
+            }
+
+            case PathCommandType::ClosePath: {
+                currentPos = startPos;
+                currentSubPath.closed = true;
+                if (!currentSubPath.points.empty() && DistanceSquared(currentSubPath.points.back(), transform.TransformPoint(startPos)) > 1e-4f) {
+                    currentSubPath.points.push_back(transform.TransformPoint(startPos));
+                }
+                break;
+            }
+        }
+    }
+
+    // 添加最后一个子路径
+    if (!currentSubPath.points.empty() && currentSubPath.points.size() >= 2) {
+        subPaths.push_back(std::move(currentSubPath));
+    }
+
+    return subPaths;
+}
+
 inline std::vector<Vec2> SVGRendererV2::GenerateCircleVertices(const Vec2& center, float radius, int segments) {
     std::vector<Vec2> vertices;
     vertices.reserve(segments);
@@ -735,6 +881,39 @@ inline void SVGRendererV2::FillSubPaths(const std::vector<std::vector<Vec2>>& su
     }
 }
 
+inline void SVGRendererV2::FillSubPathsEx(const std::vector<SubPathV2>& subPaths,
+                                           const glm::vec4& color,
+                                           FillRule fillRule,
+                                           RenderContext& ctx) {
+    if (subPaths.empty() || color.a <= 0) return;
+
+    // 对于填充，closed 属性不影响结果，只需要提取所有顶点
+    std::vector<std::vector<Vec2>> allSubPaths;
+    for (const auto& sp : subPaths) {
+        if (sp.points.size() >= 3) {
+            allSubPaths.push_back(sp.points);
+        }
+    }
+    
+    if (allSubPaths.empty()) return;
+
+    _rasterizer.SetFillRule(fillRule);
+    _rasterizer.SetAAMode(ctx.enableAA ? ctx.aaMode : ScanlineRasterizer::AAMode::None);
+
+    std::vector<float> coverage;
+    _rasterizer.RasterizeSubPaths(allSubPaths, ctx.width, ctx.height, coverage);
+
+    // Apply coverage to pixels
+    for (int y = 0; y < ctx.height; ++y) {
+        for (int x = 0; x < ctx.width; ++x) {
+            float cov = coverage[y * ctx.width + x];
+            if (cov > 0) {
+                BlendPixel(*ctx.targetImage, x, y, color, cov);
+            }
+        }
+    }
+}
+
 inline void SVGRendererV2::FillPolygonWithPaint(const std::vector<Vec2>& polygon,
                                                  const Paint& paint,
                                                  FillRule fillRule,
@@ -811,6 +990,44 @@ inline void SVGRendererV2::StrokeSubPaths(const std::vector<std::vector<Vec2>>& 
 
         if (strokePolygon.size() >= 3) {
             FillPolygon(strokePolygon, color, FillRule::NonZero, ctx);
+        }
+    }
+}
+
+inline void SVGRendererV2::StrokeSubPathsEx(const std::vector<SubPathV2>& subPaths,
+                                             const glm::vec4& color, const StrokeStyle& style,
+                                             RenderContext& ctx) {
+    if (subPaths.empty() || color.a <= 0 || style.width < 0.1f) return;
+
+    _strokeExpander.SetStyle(style);
+
+    for (const auto& subPath : subPaths) {
+        if (subPath.points.size() < 2) continue;
+        
+        // 使用明确的 closed 属性，而不是猜测
+        bool closed = subPath.closed;
+
+        // Check if we have a dash pattern
+        if (!style.dashArray.empty()) {
+            // Apply dash pattern to get multiple dash segments
+            std::vector<std::vector<Vec2>> dashSegments = _strokeExpander.ApplyDashPattern(subPath.points, closed);
+            
+            // Render each dash segment (dashes are always open paths)
+            for (const auto& segment : dashSegments) {
+                if (segment.size() >= 2) {
+                    std::vector<Vec2> strokePolygon = _strokeExpander.ExpandPolyline(segment, false);
+                    if (strokePolygon.size() >= 3) {
+                        FillPolygon(strokePolygon, color, FillRule::NonZero, ctx);
+                    }
+                }
+            }
+        } else {
+            // No dash pattern - render solid stroke
+            std::vector<Vec2> strokePolygon = _strokeExpander.ExpandPolyline(subPath.points, closed);
+
+            if (strokePolygon.size() >= 3) {
+                FillPolygon(strokePolygon, color, FillRule::NonZero, ctx);
+            }
         }
     }
 }

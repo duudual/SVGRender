@@ -25,6 +25,17 @@ public:
 
 private:
     glm::vec4 _backgroundColor;
+    
+    // ViewBox变换参数
+    float _scaleX = 1.0f;
+    float _scaleY = 1.0f;
+    float _offsetX = 0.0f;
+    float _offsetY = 0.0f;
+    
+    // 应用变换的辅助函数
+    Point2D TransformPoint(const Point2D& p) const {
+        return Point2D(p.x * _scaleX + _offsetX, p.y * _scaleY + _offsetY);
+    }
 
     // 渲染基本形状
     void RenderPath(const SVGPath& path, Common::ImageRGB& image);
@@ -57,6 +68,12 @@ private:
                               const std::vector<std::vector<Point2D>>& subPaths,
                               const glm::vec4& fillColor, const glm::vec4& strokeColor,
                               float strokeWidth = 1.0f, bool useNonZeroRule = true);
+    
+    // 使用包含闭合信息的子路径渲染
+    void DrawPathWithSubPathsEx(Common::ImageRGB& image,
+                                const std::vector<SubPath>& subPaths,
+                                const glm::vec4& fillColor, const glm::vec4& strokeColor,
+                                float strokeWidth = 1.0f, bool useNonZeroRule = true);
 
     // 像素操作
     void SetPixel(Common::ImageRGB& image, int x, int y, const glm::vec4& color);

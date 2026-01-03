@@ -7,6 +7,7 @@
 #include <sstream>
 #include <fstream>
 #include <cmath>
+#include <filesystem>
 
 namespace VCX::Labs::SVG {
 
@@ -14,6 +15,29 @@ namespace VCX::Labs::SVG {
         _texture({ .MinFilter = Engine::GL::FilterMode::Linear, .MagFilter = Engine::GL::FilterMode::Nearest }) {
         std::memset(_svgTextBuffer, 0, sizeof(_svgTextBuffer));
         _svgTextContent = "";  // 初始化文本内容
+        
+        // 计算项目根目录：从当前工作目录向上查找，直到找到包含 assets 文件夹的目录
+        std::filesystem::path currentPath = std::filesystem::current_path();
+        std::filesystem::path searchPath = currentPath;
+        
+        // 先检查当前目录
+        while (!searchPath.empty()) {
+            if (std::filesystem::exists(searchPath / "assets") && 
+                std::filesystem::exists(searchPath / "src")) {
+                _projectRoot = searchPath.string();
+                break;
+            }
+            auto parent = searchPath.parent_path();
+            if (parent == searchPath) break;  // 到达根目录
+            searchPath = parent;
+        }
+        
+        // 如果找不到，使用当前目录
+        if (_projectRoot.empty()) {
+            _projectRoot = currentPath.string();
+        }
+        
+        std::cout << "Project root: " << _projectRoot << std::endl;
     }
 
     void CaseSVGRender::OnSetupPropsUI() {
@@ -60,11 +84,10 @@ namespace VCX::Labs::SVG {
             ImGui::Text("=== Editor Settings ===");
             ImGui::Checkbox("Show Control Points", &_showControlPoints);
             ImGui::Checkbox("Auto Sync Text", &_autoSyncText);
-            ImGui::Checkbox("Show Grid", &_showGrid);
             ImGui::SliderFloat("Grid Size", &_gridSize, 10.0f, 100.0f);
             
             // 背景颜色调整
-            if (ImGui::ColorEdit4("Background", (float*)&_backgroundColor)) {
+            if (ImGui::ColorEdit4("Background", (float*)&_backgroundColor, ImGuiColorEditFlags_NoSidePreview | ImGuiColorEditFlags_AlphaBar)) {
                 UpdateRender();
             }
             if (ImGui::Button("Apply Background to SVG", ImVec2(-1, 0))) {
@@ -303,7 +326,8 @@ namespace VCX::Labs::SVG {
         // Fill Color
         if (element.style.fillColor.has_value()) {
             glm::vec4 color = element.style.fillColor.value();
-            if (ImGui::ColorEdit4("Fill Color", (float*)&color)) {
+            // 使用 NoPicker 标志让颜色选择器在当前位置展开，不会弹出到画布区域
+            if (ImGui::ColorEdit4("Fill Color", (float*)&color, ImGuiColorEditFlags_NoSidePreview | ImGuiColorEditFlags_AlphaBar)) {
                 element.style.fillColor = color;
                 // 根据元素类型同步到具体元素
                 switch (element.type) {
@@ -347,7 +371,8 @@ namespace VCX::Labs::SVG {
         // Stroke Color
         if (element.style.strokeColor.has_value()) {
             glm::vec4 color = element.style.strokeColor.value();
-            if (ImGui::ColorEdit4("Stroke Color", (float*)&color)) {
+            // 使用 NoPicker 标志让颜色选择器在当前位置展开，不会弹出到画布区域
+            if (ImGui::ColorEdit4("Stroke Color", (float*)&color, ImGuiColorEditFlags_NoSidePreview | ImGuiColorEditFlags_AlphaBar)) {
                 element.style.strokeColor = color;
                 switch (element.type) {
                     case SVGElement::Type::Rect:
@@ -545,33 +570,14 @@ namespace VCX::Labs::SVG {
         bool isMouseDown = io.MouseDown[0];
         bool wasMouseDown = _isDragging;
         
-        // Handle Tools
-        if (_currentTool == ToolType::Pan) {
-            if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-                ImVec2 delta = io.MouseDelta;
-                ImGui::SetScrollX(ImGui::GetScrollX() - delta.x);
-                ImGui::SetScrollY(ImGui::GetScrollY() - delta.y);
-            }
-            return; // Skip other interactions
-        }
-
-        if (_currentTool == ToolType::Zoom) {
-            if (io.MouseWheel != 0) {
-                float scaleFactor = 1.1f;
-                if (io.MouseWheel < 0) scaleFactor = 1.0f / scaleFactor;
-                
-                _zoomLevel *= scaleFactor;
-                _renderWidth = static_cast<uint32_t>(_renderWidth * scaleFactor);
-                _renderHeight = static_cast<uint32_t>(_renderHeight * scaleFactor);
-                UpdateRender();
-            }
-            return;
-        }
-
+        // 如果 ImGui 正在捕获鼠标（用户在操作其他 UI 元素如颜色选择器、Layer 面板等）
+        // 不开始新的拖拽，但仍需处理进行中的拖拽
+        bool imguiCaptureMouse = io.WantCaptureMouse;
+        
         // Default Select/Edit Mode
         
         // 鼠标刚刚按下（新的点击事件）
-        if (mouseJustPressed && !_isDragging) {
+        if (mouseJustPressed && !_isDragging && !imguiCaptureMouse) {
             // 只处理以下情况的点击：
             // 1. 鼠标在画布范围内
             // 2. 没有点击在覆盖UI上（工具栏按钮等）
@@ -647,15 +653,6 @@ namespace VCX::Labs::SVG {
         if (ImGui::Button("Select")) _currentTool = ToolType::Select;
         ImGui::PopStyleColor();
         
-        ImGui::SameLine();
-        ImGui::PushStyleColor(ImGuiCol_Button, _currentTool == ToolType::Pan ? ImVec4(0.4f, 0.4f, 0.8f, 1.0f) : ImVec4(0.2f, 0.2f, 0.2f, 0.8f));
-        if (ImGui::Button("Pan")) _currentTool = ToolType::Pan;
-        ImGui::PopStyleColor();
-
-        ImGui::SameLine();
-        ImGui::PushStyleColor(ImGuiCol_Button, _currentTool == ToolType::Zoom ? ImVec4(0.4f, 0.4f, 0.8f, 1.0f) : ImVec4(0.2f, 0.2f, 0.2f, 0.8f));
-        if (ImGui::Button("Zoom")) _currentTool = ToolType::Zoom;
-        ImGui::PopStyleColor();
 
         ImGui::EndGroup();
     }
@@ -665,7 +662,7 @@ namespace VCX::Labs::SVG {
         ImGui::SetCursorPos(ImVec2(10, windowSize.y - 30));
         ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.8f, 1.0f), "Pos: (%.1f, %.1f) | Zoom: %.1f%% | Tool: %s", 
             mousePos.x, mousePos.y, _zoomLevel * 100.0f, 
-            _currentTool == ToolType::Select ? "Select" : _currentTool == ToolType::Pan ? "Pan" : "Zoom");
+            "Select");
     }
 
     void CaseSVGRender::StartDrag(float x, float y) {
@@ -797,8 +794,12 @@ namespace VCX::Labs::SVG {
     }
 
     void CaseSVGRender::LoadSVGFile() {
+        // 构造完整路径
+        std::filesystem::path fullPath = std::filesystem::path(_projectRoot) / _svgFilePath;
+        std::string fullPathStr = fullPath.string();
+        
         // 尝试加载测试SVG文件
-        std::ifstream file(_svgFilePath);
+        std::ifstream file(fullPath);
         if (file.is_open()) {
             std::stringstream buffer;
             buffer << file.rdbuf();
@@ -806,7 +807,7 @@ namespace VCX::Labs::SVG {
             file.close();
         }
 
-        if (_svgParser.ParseFile(_svgFilePath, _svgDocument)) {
+        if (_svgParser.ParseFile(fullPathStr, _svgDocument)) {
             _fileLoaded = true;
             _recompute = true;
             
@@ -817,13 +818,13 @@ namespace VCX::Labs::SVG {
                 _svgTextBuffer[n] = '\0';
             }
             
-            std::cout << "SVG file loaded successfully: " << _svgFilePath << std::endl;
+            std::cout << "SVG file loaded successfully: " << fullPathStr << std::endl;
             std::cout << "Elements found: " << _svgDocument.elements.size() << std::endl;
             
             UpdateElementBounds();
         }
         else{
-            std::cerr << "Failed to load SVG file: " << _svgFilePath << std::endl;
+            std::cerr << "Failed to load SVG file: " << fullPathStr << std::endl;
         }
     }
 
@@ -831,13 +832,20 @@ namespace VCX::Labs::SVG {
         // 在保存前确保SVG文本是最新的
         UpdateTextFromSVG();
         
-        std::ofstream file(_svgFilePath);
+        // 构造完整路径（项目根目录 + 相对路径）
+        std::filesystem::path fullPath = std::filesystem::path(_projectRoot) / _svgFilePath;
+        
+        std::ofstream file(fullPath, std::ios::out | std::ios::trunc);
         if (file.is_open()) {
-            file << _svgTextBuffer;
+            std::string content = _svgTextBuffer;
+            file << content;
+            file.flush();
             file.close();
-            std::cout << "SVG file saved successfully: " << _svgFilePath << std::endl;
+            std::cout << "SVG file saved successfully!" << std::endl;
+            std::cout << "  Path: " << fullPath.string() << std::endl;
+            std::cout << "  Content length: " << content.size() << " bytes" << std::endl;
         } else {
-            std::cerr << "Failed to save SVG file: " << _svgFilePath << std::endl;
+            std::cerr << "Failed to save SVG file: " << fullPath.string() << std::endl;
         }
     }
 
@@ -1489,12 +1497,13 @@ namespace VCX::Labs::SVG {
                     }
                     
                     oss << "\"";
-                    if (elem.path.style.fillColor) {
+                    if (elem.path.style.fillNone) {
+                        oss << " fill=\"none\"";
+                    } else if (elem.path.style.fillColor) {
                         auto c = *elem.path.style.fillColor;
                         oss << " fill=\"rgb(" << (int)(c.r*255) << "," << (int)(c.g*255) << "," << (int)(c.b*255) << ")\"";
-                    } else {
-                        oss << " fill=\"none\"";
                     }
+                    // 如果没有fillColor也没有fillNone，则使用默认黑色，不需要输出（SVG默认）
                     if (elem.path.style.strokeColor) {
                         auto c = *elem.path.style.strokeColor;
                         oss << " stroke=\"rgb(" << (int)(c.r*255) << "," << (int)(c.g*255) << "," << (int)(c.b*255) << ")\"";

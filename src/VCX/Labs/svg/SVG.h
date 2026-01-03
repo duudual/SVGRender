@@ -105,6 +105,12 @@ struct PathCommand {
     PathCommand(PathCommandType t, bool rel = false) : type(t), relative(rel) {}
 };
 
+// 子路径结构（包含顶点和是否闭合）
+struct SubPath {
+    std::vector<Point2D> points;
+    bool closed = false;
+};
+
 // SVG路径元素
 struct SVGPath {
     std::vector<PathCommand> commands;
@@ -117,6 +123,9 @@ struct SVGPath {
     
     // 获取所有子路径（每个子路径是一个独立的多边形）
     std::vector<std::vector<Point2D>> GetSubPaths() const;
+    
+    // 获取所有子路径（包含闭合信息）
+    std::vector<SubPath> GetSubPathsWithClosedInfo() const;
 };
 
 // SVG圆形元素
